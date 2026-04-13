@@ -1,8 +1,8 @@
 <h1 align="center">Loveable Saves</h1>
 <br>
 <p align="center">
-  <em>Loveable Saves is a library meant to facilitate the saving/loading of
-    <br> objects into save files using the [Saveable] decorator.</em>
+  <em>Loveable Saves is a library meant to facilitate the saving/loading of objects,
+    <br>into save files, using the [Saveable] decorator.</em>
   <br>
   <br>
   <a href="https://github.com/AxelBilla/Loveable-Saves/releases/"><img src="https://img.shields.io/github/release/AxelBilla/Loveable-Saves?include_prereleases=&sort=semver&color=blue" alt="GitHub release"></a>
