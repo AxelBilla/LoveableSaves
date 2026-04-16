@@ -5,7 +5,6 @@ using System.IO;
 using System.Reflection;
 using System.Text.RegularExpressions;
 using Newtonsoft.Json.Linq;
-using UnityEngine;
 
 
 namespace LoveableSaves {
@@ -56,6 +55,9 @@ namespace LoveableSaves {
         public static void Save(object obj, string path) {
             string serialized_object = Serialize(obj);
             ToFile(path, serialized_object, "json");
+        }
+        public static string Save(object obj) {
+            return Serialize(obj);
         }
 
         public static void Load(object obj, string file) {
@@ -138,7 +140,10 @@ namespace LoveableSaves {
             if (value == "" || value == "[]" || value == "{}") return default;
             else if (value == "NULL") return null;
             else {
-                if (member_type.IsGenericType && (member_type.GetGenericTypeDefinition() == typeof(List<>))) {
+                if(Implementation.Has(member_type)){
+                    return Implementation.Deserialize(member_type, value);
+                }
+                else if (member_type.IsGenericType && (member_type.GetGenericTypeDefinition() == typeof(List<>))) {
                     List<object> content_arr = new List<object>();
                     if (member_type.GetGenericArguments()[0] == typeof(string)) {
                         List<string> arr = JSON.Get<List<string>>(value);
@@ -158,23 +163,10 @@ namespace LoveableSaves {
                 else if (member_type.IsEnum) {
                     return Enum.Parse(member_type, value);
                 }
-                else if (member_type.Namespace == typeof(UnityEngine.Object).Namespace) {
-                    return ConvertToUnityObject(value, member_type);
-                }
                 else {
                     return Convert.ChangeType(value, member_type);
                 }
             }
-        }
-
-        private static object ConvertToUnityObject(string value, Type type) {
-            switch (type.Name) {
-                case nameof(Vector3):
-                    value = value.Trim('[', ']');
-                    string[] a = value.Split(',');
-                    return new Vector3(float.Parse(a[0]), float.Parse(a[1]), float.Parse(a[2]));
-            }
-            return null;
         }
 
         private static object ConvertList(List<object> value, Type type) {
@@ -202,21 +194,18 @@ namespace LoveableSaves {
             return first + text + second;
         }
 
-        private static class Sanitize {
+        public static class Sanitize {
             public static string Field(object content) {
                 string formated_value;
 
                 if (content == null) {
                     formated_value = "null";
                 }
+                else if(Implementation.Has(content.GetType())){
+                    return Implementation.Serialize(content.GetType(), content);
+                }
                 else {
                     switch (content) {
-                        case Vector3 _:
-                            formated_value = content.ToString();
-                            formated_value = Sanitize.Replace(formated_value, @"\(", @"[");
-                            formated_value = Sanitize.Replace(formated_value, @"\)", @"]");
-                            break;
-
                         case string _:
                             formated_value = Wrap(content.ToString(), "`");
                             break;
@@ -271,6 +260,42 @@ namespace LoveableSaves {
 
             return path;
         }
+
+
+        public static class Implementation {
+            private static Dictionary<Type, (Func<object, string> serialize, Func<string, object> deserialize)> CustomTypeImplementation = new Dictionary<Type, (Func<object, string>, Func<string, object>)>();
+
+            public static void Set<T>(Func<object, string> serialization, Func<string, object> deserialization) {
+                CustomTypeImplementation[typeof(T)] = (serialization, deserialization);
+            }
+
+            public static (Func<object, string> serialize, Func<string, object> deserialize) Get(Type type) {
+                if (CustomTypeImplementation.Count <= 0) LoveableSaves.Types.Set();
+
+                return CustomTypeImplementation[type];
+            }
+
+            public static bool Has(Type type) {
+                if (CustomTypeImplementation.Count <= 0) LoveableSaves.Types.Set();
+
+                return CustomTypeImplementation.ContainsKey(type);
+            }
+
+            public static string Serialize(Type type, object value) {
+                return Get(type).serialize(value);
+            }
+
+            public static object Deserialize(Type type, string value) {
+                return Get(type).deserialize(value);
+            }
+        }
+    }
+
+    public interface ISave {
+        string[] ToSave();
     }
 
 }
+
+
+
