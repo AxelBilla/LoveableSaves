@@ -81,7 +81,7 @@
 
 ## `Saveable.Save(object, path)` : `void`
     (object)      [object]: Object to be saved.
-    (string)      [path]: Path of the JSON file to overwrite/create with object's save data.
+    (string)      [path]: Path to the JSON file to overwrite/create with object's save data.
     
   
   > [!NOTE]
@@ -100,7 +100,7 @@
 
 ## `Saveable.Load(object, file)` : `void`
     (object)      [object]: Object to be overwritten by file's save data.
-    (string)      [path]: File containing save data.
+    (string)      [file]: Content of a save file.
     
   
   > [!NOTE]
