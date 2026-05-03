@@ -35,17 +35,24 @@ namespace LoveableSaves {
 
             if (additional_fields.Length == 0 && obj is ISave) additional_fields = ((ISave)obj).ToSave();
             foreach (string field_name in additional_fields) {
-                (MemberInfo info, object obj) member = TryGetFullNameMember(obj, field_name);
-                string formated_value = Sanitize.Field(member.info.GetValue(member.obj));
+                try {
+                    (MemberInfo info, object obj) member = TryGetFullNameMember(obj, field_name);
+                    string formated_value = Sanitize.Field(member.info.GetValue(member.obj));
 
-                file += Wrap(field_name) + " : " + formated_value + ((field_name == additional_fields[additional_fields.Length - 1] && saved_fields.Count == 0) ? "\n": ",\n");
+                    file += Wrap(field_name) + " : " + formated_value + ((field_name == additional_fields[additional_fields.Length - 1] && saved_fields.Count == 0) ? "\n": ",\n");
+                } catch {
+                    throw Errors.InvalidField(field_name, obj);
+                }
             }
             foreach (FieldInfo field in saved_fields) {
-                object field_value = field.GetValue(obj);
-                string formated_value = Sanitize.Field(field_value);
+                try {
+                    object field_value = field.GetValue(obj);
+                    string formated_value = Sanitize.Field(field_value);
 
-                file += Wrap(field.Name) + " : " + formated_value + ((field != saved_fields[saved_fields.Count - 1]) ? ",\n": "\n");
-
+                    file += Wrap(field.Name) + " : " + formated_value + ((field != saved_fields[saved_fields.Count - 1]) ? ",\n": "\n");
+                } catch {
+                    throw Errors.InvalidField(field.Name, obj);
+                }
             }
 
 
@@ -56,6 +63,7 @@ namespace LoveableSaves {
             string serialized_object = Serialize(obj);
             ToFile(path, serialized_object, "json");
         }
+
         public static string Save(object obj) {
             return Serialize(obj);
         }
@@ -70,7 +78,7 @@ namespace LoveableSaves {
                 FieldInfo[] fields = type.GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.FlattenHierarchy);
                 foreach (FieldInfo field in fields) {
                     if (saved_fields_file.ContainsKey(field.Name)) {
-                        // "private protected" fields technically creates a new field of the same name, so we have to ignore them.
+                        // "private protected" fields technically create a new field of the same name, so we have to ignore them.
                         if (!saved_fields.ContainsKey(field.Name)) saved_fields.Add(field.Name, field);
                     }
                 }
@@ -104,7 +112,15 @@ namespace LoveableSaves {
 
         private static void TrySetFullNameMember(object obj, string field_name, string value) {
             (MemberInfo info, object obj) member = TryGetFullNameMember(obj, field_name);
-            member.info.SetValue(member.obj, ConvertValue(member.info, value));
+
+            if (member.info == null) throw Errors.MissingField(field_name);
+            else {
+                try {
+                    member.info.SetValue(member.obj, ConvertValue(member.info, value));
+                } catch {
+                    throw Errors.InvalidValue(member.info, value);
+                }
+            }
         }
 
         private static (MemberInfo, object) TryGetFullNameMember(object obj, string field_name) {
@@ -113,9 +129,14 @@ namespace LoveableSaves {
             string[] field_members = field_name.Split('.');
             int i = (field_members[0] == "this") ? 1 : 0;
 
-            MemberInfo member = obj.GetType().GetMember(field_members[i])[0];
+            MemberInfo member = null;
+            try {
+                member = obj.GetType().GetMember(field_members[i])[0];
+            } catch {
+                throw Errors.InvalidField(field_name, obj);
+            }
 
-            if (field_members.Length > 1) {
+            if (field_members.Length > 1 && member!=null) {
                 for (i += 1; i < field_members.Length; i++) {
                     obj = member.GetValue(obj);
                     try {
@@ -130,7 +151,11 @@ namespace LoveableSaves {
         }
 
         private static void SetField(object obj, FieldInfo field, object value) {
-            field.SetValue(obj, value);
+            try {
+                field.SetValue(obj, value);
+            } catch {
+                throw new Exception("Invalid Value, Field \"" + field.Name + "\" expected a value of type <" + field.FieldType.Name + ">, but received \"" + value + "\"");
+            }
         }
 
         private static object ConvertValue(MemberInfo member, string value) {
@@ -140,31 +165,37 @@ namespace LoveableSaves {
             if (value == "" || value == "[]" || value == "{}") return default;
             else if (value == "NULL") return null;
             else {
-                if(Implementation.Has(member_type)){
-                    return Implementation.Deserialize(member_type, value);
-                }
-                else if (member_type.IsGenericType && (member_type.GetGenericTypeDefinition() == typeof(List<>))) {
-                    List<object> content_arr = new List<object>();
-                    if (member_type.GetGenericArguments()[0] == typeof(string)) {
-                        List<string> arr = JSON.Get<List<string>>(value);
-                        foreach (string item in arr) {
-                            content_arr.Add(item);
+                try {
+
+                    if (Implementation.Has(member_type)) {
+                        return Implementation.Deserialize(member_type, value);
+                    }
+                    else if (member_type.IsGenericType && (member_type.GetGenericTypeDefinition() == typeof(List<>))) {
+                        List<object> content_arr = new List<object>();
+                        if (member_type.GetGenericArguments()[0] == typeof(string)) {
+                            List<string> arr = JSON.Get<List<string>>(value);
+                            foreach (string item in arr) {
+                                content_arr.Add(item);
+                            }
                         }
+                        else {
+                            List<JObject> items = JSON.Get<List<JObject>>(value);
+                            foreach (JObject item in items) {
+                                object i = JSON.Deserialize(item.ToString(), member_type.GetGenericArguments()[0]);
+                                content_arr.Add(i);
+                            }
+                        }
+                        return ConvertList(content_arr, member_type);
+                    }
+                    else if (member_type.IsEnum) {
+                        return Enum.Parse(member_type, value);
                     }
                     else {
-                        List<JObject> items = JSON.Get<List<JObject>>(value);
-                        foreach (JObject item in items) {
-                            object i = JSON.Deserialize(item.ToString(), member_type.GetGenericArguments()[0]);
-                            content_arr.Add(i);
-                        }
+                        return Convert.ChangeType(value, member_type);
                     }
-                    return ConvertList(content_arr, member_type);
-                }
-                else if (member_type.IsEnum) {
-                    return Enum.Parse(member_type, value);
-                }
-                else {
-                    return Convert.ChangeType(value, member_type);
+
+                } catch {
+                    throw Errors.InvalidValue(member, value);
                 }
             }
         }
@@ -201,7 +232,7 @@ namespace LoveableSaves {
                 if (content == null) {
                     formated_value = "null";
                 }
-                else if(Implementation.Has(content.GetType())){
+                else if (Implementation.Has(content.GetType())) {
                     return Implementation.Serialize(content.GetType(), content);
                 }
                 else {
@@ -252,11 +283,17 @@ namespace LoveableSaves {
 
         private static string ToFile(string path, string file, string extension = "") {
             if (extension != "") path += "." + extension;
-            if (!System.IO.File.Exists(path)) System.IO.File.Create(path).Close();
 
-            StreamWriter file_stream = System.IO.File.CreateText(path);
-            file_stream.Write(file);
-            file_stream.Close();
+            try {
+                if (!System.IO.File.Exists(path)) System.IO.File.Create(path).Close();
+
+                StreamWriter file_stream = System.IO.File.CreateText(path);
+                file_stream.Write(file);
+                file_stream.Close();
+
+            } catch {
+                throw Errors.CouldNotWriteToFile(path);
+            }
 
             return path;
         }
@@ -289,9 +326,27 @@ namespace LoveableSaves {
                 return Get(type).deserialize(value);
             }
         }
-    }
-    
-}
 
+        private static class Errors {
+            public static Exception InvalidValue(MemberInfo member, string value) {
+                return new Exception("Invalid Value, field \"" + member.Name + "\" expected a value of type <" + ((FieldInfo)member).FieldType.Name + ">, but received \"" + value + "\"");
+            }
+
+            public static Exception MissingField(string field_name) {
+                return new Exception("Missing Field, field \"" + field_name + "\" could not be found");
+            }
+
+            public static Exception CouldNotWriteToFile(string file_path){
+                return new Exception("Could Not Write to File, file at \"" + file_path + "\" could not be overwritten");
+
+            }
+
+            public static Exception InvalidField(string field_name, object obj){
+                return new Exception("Invalid Field, field \"" + field_name+ "\" could not be found within \""+obj+"\"");
+            }
+        }
+    }
+
+}
 
 
