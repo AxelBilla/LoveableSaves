@@ -6,7 +6,7 @@
   <br>
   <br>
   <a href="https://github.com/AxelBilla/Loveable-Saves/releases/"><img src="https://img.shields.io/github/release/AxelBilla/Loveable-Saves?include_prereleases=&sort=semver&color=blue" alt="GitHub release"></a>
-  <a href="#license"><img src="https://img.shields.io/badge/License-CC_BY--SA_4.0-blue" alt="License"></a>
+  <a href="#license"><img src="https://img.shields.io/badge/License-CC0-red" alt="License"></a>
   <a href="https://github.com/AxelBilla/Loveable-Saves/issues"><img src="https://img.shields.io/github/issues/AxelBilla/Loveable-Saves" alt="issues - Loveable Save"></a>
   <br>
   <br>
