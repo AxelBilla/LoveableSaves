@@ -2,7 +2,6 @@ using System;
 using System.Reflection;
 
 namespace LoveableSaves {
-
     public static class SaveExtensions {
 
         public static void SetValue(this MemberInfo member, object obj, object value) {

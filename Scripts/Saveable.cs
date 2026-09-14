@@ -9,27 +9,34 @@ using Newtonsoft.Json.Linq;
 
 namespace LoveableSaves {
 
-    [AttributeUsage(AttributeTargets.Field, Inherited = true)]
+    [AttributeUsage(AttributeTargets.All, Inherited = true)]
     public class Saveable : Attribute {
         public Saveable() {
         }
 
-        private static List<FieldInfo> GetSaved(Type type) {
-            List<FieldInfo> saved_fields = new List<FieldInfo>();
+        private static List<MemberInfo> GetSaved(Type type) {
+            List<MemberInfo> saved_fields = new List<MemberInfo>();
             do{
+                PropertyInfo[] props = type.GetProperties(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.FlattenHierarchy);
+                foreach (PropertyInfo prop in props) {
+                    Saveable isSaved = (Saveable)Attribute.GetCustomAttribute(prop, typeof(Saveable));
+                    if (isSaved != null) saved_fields.Add(prop);
+                }
                 FieldInfo[] fields = type.GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.FlattenHierarchy);
                 foreach (FieldInfo field in fields) {
                     Saveable isSaved = (Saveable)Attribute.GetCustomAttribute(field, typeof(Saveable));
                     if (isSaved != null) saved_fields.Add(field);
                 }
+
                 type = type.BaseType;
             } while (type != null);
             return saved_fields;
         }
 
+
         private static string Serialize(object obj, params string[] additional_fields) {
             Type type = obj.GetType();
-            List<FieldInfo> saved_fields = GetSaved(type);
+            List<MemberInfo> saved_fields = GetSaved(type);
 
             string file = "";
 
@@ -44,7 +51,7 @@ namespace LoveableSaves {
                     throw Errors.InvalidField(field_name, obj);
                 }
             }
-            foreach (FieldInfo field in saved_fields) {
+            foreach (MemberInfo field in saved_fields) {
                 try {
                     object field_value = field.GetValue(obj);
                     string formated_value = Sanitize.Field(field_value);
@@ -55,8 +62,7 @@ namespace LoveableSaves {
                 }
             }
 
-
-            return (file != "") ? Wrap(file, "{\n", "}") : file;
+            return (file != "") ? Wrap(file, "{\n", "}") : obj?.ToString();
         }
 
         public static void Save(object obj, string path) {
@@ -72,9 +78,16 @@ namespace LoveableSaves {
             Type type = obj.GetType();
 
             JObject saved_fields_file = JSON.Get(file);
-            Dictionary<string, FieldInfo> saved_fields = new Dictionary<string, FieldInfo>();
+            Dictionary<string, MemberInfo> saved_fields = new Dictionary<string, MemberInfo>();
 
             do{
+                PropertyInfo[] props = type.GetProperties(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.FlattenHierarchy);
+                foreach (PropertyInfo prop in props) {
+                    if (saved_fields_file.ContainsKey(prop.Name)) {
+                        // "private protected" fields technically create a new field of the same name, so we have to ignore them.
+                        if (!saved_fields.ContainsKey(prop.Name)) saved_fields.Add(prop.Name, prop);
+                    }
+                }
                 FieldInfo[] fields = type.GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.FlattenHierarchy);
                 foreach (FieldInfo field in fields) {
                     if (saved_fields_file.ContainsKey(field.Name)) {
@@ -91,20 +104,27 @@ namespace LoveableSaves {
             }
         }
 
-        private static void SetFields(object obj, JObject content, FieldInfo field) {
+        private static void SetFields(object obj, JObject content, MemberInfo field) {
             SetFields(obj, content.ToString(), field);
         }
 
-        private static void SetFields(object obj, string content, FieldInfo field) {
+        private static void SetFields(object obj, string content, MemberInfo field) {
             JObject file = JSON.Get(content, field.Name);
-            if (file != null && !file.ContainsKey(JSON.Values.SINGLE)) {
+
+            if (file != null && !file.ContainsKey(JSON.Values.SINGLE) && !(field.ResolveMemberType().IsGenericType && typeof(IDictionary).IsAssignableFrom(field.ResolveMemberType().GetGenericTypeDefinition())) ) {
                 foreach (KeyValuePair<string, JToken> v in file) {
-                    FieldInfo sub_field = field.FieldType.GetField(v.Key, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.FlattenHierarchy);
+                    FieldInfo sub_field = field.ResolveMemberType().GetField(v.Key, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.FlattenHierarchy);
+
                     if (sub_field != null) SetFields(field.GetValue(obj), v.Value.ToString(), sub_field);
-                    else TrySetFullNameMember(field.GetValue(obj), v.Key, v.Value.ToString());
+                    else {
+                        PropertyInfo sub_prop = field.ResolveMemberType().GetProperty(v.Key, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.FlattenHierarchy);
+                        if (sub_prop != null) SetFields(field.GetValue(obj), v.Value.ToString(), sub_prop);
+                        else TrySetFullNameMember(field.GetValue(obj), v.Key, v.Value.ToString());
+                    }
                 }
             }
             else {
+
                 if (file != null && file.ContainsKey(JSON.Values.SINGLE)) content = file.GetValue(JSON.Values.SINGLE).ToString();
                 SetField(obj, field, ConvertValue(field, content));
             }
@@ -150,11 +170,11 @@ namespace LoveableSaves {
             return (member, obj);
         }
 
-        private static void SetField(object obj, FieldInfo field, object value) {
+        private static void SetField(object obj, MemberInfo field, object value) {
             try {
                 field.SetValue(obj, value);
             } catch {
-                throw new Exception("Invalid Value, Field \"" + field.Name + "\" expected a value of type <" + field.FieldType.Name + ">, but received \"" + value + "\"");
+                throw new Exception("Invalid Value, Field \"" + field.Name + "\" expected a value of type <" + field.ResolveMemberType().Name + ">, but received \"" + value + "\"");
             }
         }
 
@@ -166,11 +186,10 @@ namespace LoveableSaves {
             else if (value == "NULL") return null;
             else {
                 try {
-
                     if (Implementation.Has(member_type)) {
                         return Implementation.Deserialize(member_type, value);
                     }
-                    else if (member_type.IsGenericType && (member_type.GetGenericTypeDefinition() == typeof(List<>))) {
+                    else if (member_type.IsGenericType && typeof(IList).IsAssignableFrom(member_type.GetGenericTypeDefinition())) {
                         List<object> content_arr = new List<object>();
                         if (member_type.GetGenericArguments()[0] == typeof(string)) {
                             List<string> arr = JSON.Get<List<string>>(value);
@@ -187,6 +206,29 @@ namespace LoveableSaves {
                         }
                         return ConvertList(content_arr, member_type);
                     }
+                    else if (member_type.IsGenericType && (typeof(IDictionary).IsAssignableFrom(member_type.GetGenericTypeDefinition())) ) {
+                        Dictionary<object, object> content_dict = new Dictionary<object, object>();
+                        JObject items = JSON.Get<JObject>(value);
+
+                        Type key_type = member_type.GetGenericArguments()[0];
+                        Type value_type = member_type.GetGenericArguments()[1];
+
+                        foreach(var item in items) {
+
+                            object deserialized_key = (key_type == typeof(string)) ? item.Key.ToString() : Create(key_type, item.Key.ToString());
+                            object deserialized_value = (value_type == typeof(string)) ? item.Value.ToString() : Create(value_type, item.Value.ToString());
+
+
+                            if(!content_dict.ContainsKey(deserialized_key)) content_dict.Add(deserialized_key, deserialized_value);
+                            else throw Errors.InvalidDuplicateKey(item.Key.ToString(), member.Name);
+
+                        }
+
+                        return ConvertDict(content_dict, member_type);
+                    }
+                    else if (member_type == typeof(Type)) {
+                        return Type.GetType(value);
+                    }
                     else if (member_type.IsEnum) {
                         return Enum.Parse(member_type, value);
                     }
@@ -200,12 +242,30 @@ namespace LoveableSaves {
             }
         }
 
-        private static object ConvertList(List<object> value, Type type) {
+        private static object ConvertList(List<object> values, Type type) {
             IList list = (IList)Activator.CreateInstance(type);
-            foreach (var item in value) {
-                list.Add(item);
+            foreach (var item in values) {
+                list.Add(ConvertValue(type.GetGenericArguments()[0], values.ToString()));
             }
             return list;
+        }
+        private static object ConvertDict(IDictionary values, Type type) {
+            IDictionary list = (IDictionary)Activator.CreateInstance(type);
+            foreach (var key in values.Keys) {
+                list.Add(key, values[key]);
+            }
+
+            return list;
+        }
+
+        private static object Create(Type type, string content){
+
+            if(GetSaved(type).Count<=0) return ConvertValue(type, content);
+
+                object obj = Activator.CreateInstance(type);
+                Load(obj, content);
+                return obj;
+
         }
 
         private static string Wrap(string text, string wrapper = "\"") {
@@ -239,6 +299,26 @@ namespace LoveableSaves {
                     switch (content) {
                         case string _:
                             formated_value = Wrap(content.ToString(), "`");
+                            break;
+
+                        case Type _:
+                            formated_value = ((Type)content).AssemblyQualifiedName;
+                            if (formated_value != "") formated_value = Wrap(formated_value);
+                            else formated_value = Wrap(content.ToString());
+                            break;
+
+                        case IDictionary _:
+                            formated_value = "{\n";
+                            IDictionary dict_values = (IDictionary)content;
+                            int y = 0;
+                            foreach (var k in dict_values.Keys) {
+                                string dict_string = Wrap(Serialize(k).ToString())+":"+Wrap(Serialize(dict_values[k]).ToString());
+
+                                formated_value += dict_string;
+                                if (y < dict_values.Count - 1) formated_value += "," + ((dict_string.Contains("\n")) ? "\n": "");
+                                y++;
+                            }
+                            formated_value += "}";
                             break;
 
                         case IList _:
@@ -329,7 +409,7 @@ namespace LoveableSaves {
 
         private static class Errors {
             public static Exception InvalidValue(MemberInfo member, string value) {
-                return new Exception("Invalid Value, field \"" + member.Name + "\" expected a value of type <" + ((FieldInfo)member).FieldType.Name + ">, but received \"" + value + "\"");
+                return new Exception("Invalid Value, field \"" + member.Name + "\" expected a value of type <" + member.ResolveMemberType().Name + ">, but received \"" + value + "\"");
             }
 
             public static Exception MissingField(string field_name) {
@@ -343,6 +423,14 @@ namespace LoveableSaves {
 
             public static Exception InvalidField(string field_name, object obj){
                 return new Exception("Invalid Field, field \"" + field_name+ "\" could not be found within \""+obj+"\"");
+            }
+
+            public static Exception InvalidDuplicateKey(string key_name, object obj){
+                return new Exception("Invalid Duplicate, key \"" + key_name+ "\" already exists in \""+obj+"\"");
+            }
+
+            public static Exception MissingDefaultConstructor(string type_name){
+                return new Exception("Missing Default Constructor, \""+type_name+"\" is missing a default constructor.");
             }
         }
     }
